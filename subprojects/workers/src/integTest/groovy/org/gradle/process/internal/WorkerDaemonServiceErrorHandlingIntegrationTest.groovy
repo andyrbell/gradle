@@ -118,6 +118,7 @@ class WorkerDaemonServiceErrorHandlingIntegrationTest extends AbstractWorkerDaem
         fails("runInDaemon")
 
         then:
+        failureHasCause("A failure occurred while executing org.gradle.test.TestRunnable")
         failureCauseContains("Could not read message")
         failureHasCause("writing aborted; java.io.NotSerializableException: org.gradle.other.Bar")
     }
@@ -141,6 +142,44 @@ class WorkerDaemonServiceErrorHandlingIntegrationTest extends AbstractWorkerDaem
 
         and:
         failureHasCause("Failure from runnable")
+    }
+
+    def "produces a sensible error when the runnable cannot be instantiated"() {
+        withRunnableClassInBuildSrc()
+
+        buildFile << """
+            $runnableThatFailsInstantiation
+
+            task runInDaemon(type: DaemonTask) {
+                runnableClass = RunnableThatFails.class
+            }
+        """
+
+        when:
+        fails("runInDaemon")
+
+        then:
+        failureHasCause("A failure occurred while executing RunnableThatFails")
+        failureHasCause("You shall not pass!")
+    }
+
+    def "produces a sensible error when parameters are incorrect"() {
+        withRunnableClassInBuildSrc()
+
+        buildFile << """
+            $runnableWithDifferentConstructor
+
+            task runInDaemon(type: DaemonTask) {
+                runnableClass = RunnableWithDifferentConstructor.class
+            }
+        """
+
+        when:
+        fails("runInDaemon")
+
+        then:
+        failureHasCause("A failure occurred while executing RunnableWithDifferentConstructor")
+        failureHasCause("Could not find any public constructor for class RunnableWithDifferentConstructor which accepts parameters")
     }
 
     String getUnrecognizedOptionError() {
@@ -181,6 +220,31 @@ class WorkerDaemonServiceErrorHandlingIntegrationTest extends AbstractWorkerDaem
                     BadException(String message) {
                         super(message);
                     }
+                }
+            }
+        """
+    }
+
+    String getRunnableThatFailsInstantiation() {
+        return """
+            public class RunnableThatFails implements Runnable {
+                public RunnableThatFails(List<String> files, File outputDir, Foo foo) { 
+                    throw new IllegalArgumentException("You shall not pass!")
+                }
+
+                public void run() {
+                }
+            }
+        """
+    }
+
+    String getRunnableWithDifferentConstructor() {
+        return """
+            public class RunnableWithDifferentConstructor implements Runnable {
+                public RunnableWithDifferentConstructor(List<String> files, File outputDir) { 
+                }
+
+                public void run() {
                 }
             }
         """
