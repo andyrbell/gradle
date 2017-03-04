@@ -15,12 +15,11 @@
  */
 package org.gradle.api.internal.tasks.testing.junit;
 
-import org.apache.commons.lang.StringUtils;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.Description;
 import org.junit.runner.manipulation.Filter;
 
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -29,84 +28,117 @@ import java.util.Set;
  *
  */
 class CategoryFilter extends Filter {
-    // the way filters are implemented makes this unnecessarily complicated,
-    // buggy, and difficult to specify.  A new way of handling filters could
-    // someday enable a better new implementation.
-    // https://github.com/junit-team/junit/issues/172
-
-    private final Set<Class<?>> inclusions;
-    private final Set<Class<?>> exclusions;
+    private final Set<Class<?>> included;
+    private final Set<Class<?>> excluded;
 
     public CategoryFilter(final Set<Class<?>> inclusions, final Set<Class<?>> exclusions) {
-        this.inclusions = inclusions;
-        this.exclusions = exclusions;
+        this.included = inclusions;
+        this.excluded = exclusions;
+    }
+
+    /**
+     * @see #toString()
+     */
+    @Override
+    public String describe() {
+        return toString();
+    }
+
+    /**
+     * Returns string in the form <tt>&quot;[included categories] - [excluded categories]&quot;</tt>, where both
+     * sets have comma separated names of categories.
+     *
+     * @return string representation for the relative complement of excluded categories set
+     * in the set of included categories. Examples:
+     * <ul>
+     *  <li> <tt>&quot;categories [all]&quot;</tt> for all included categories and no excluded ones;
+     *  <li> <tt>&quot;categories [all] - [A, B]&quot;</tt> for all included categories and given excluded ones;
+     *  <li> <tt>&quot;categories [A, B] - [C, D]&quot;</tt> for given included categories and given excluded ones.
+     * </ul>
+     * @see Class#toString() name of category
+     */
+    @Override public String toString() {
+        StringBuilder description= new StringBuilder("categories ")
+            .append(included.isEmpty() ? "[all]" : included);
+        if (!excluded.isEmpty()) {
+            description.append(" - ").append(excluded);
+        }
+        return description.toString();
     }
 
     @Override
-    public boolean shouldRun(final Description description) {
-        return shouldRun(description, description.isSuite() ? null : Description.createSuiteDescription(description.getTestClass()));
+    public boolean shouldRun(Description description) {
+        if (hasCorrectCategoryAnnotation(description)) {
+            return true;
+        }
+
+        for (Description each : description.getChildren()) {
+            if (shouldRun(each)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
-    private boolean shouldRun(final Description description, final Description parent) {
-        final Set<Class<?>> categories = new HashSet<Class<?>>();
-        Category annotation = description.getAnnotation(Category.class);
-        if (annotation != null) {
-            categories.addAll(Arrays.asList(annotation.value()));
+    private boolean hasCorrectCategoryAnnotation(Description description) {
+        final Set<Class<?>> childCategories = categories(description);
+
+        // If a child has no categories, immediately return.
+        if (childCategories.isEmpty()) {
+            return included.isEmpty();
         }
 
-        if (parent != null) {
-            annotation = parent.getAnnotation(Category.class);
-            if (annotation != null) {
-                categories.addAll(Arrays.asList(annotation.value()));
+        if (!excluded.isEmpty()) {
+            if (matchesAnyParentCategories(childCategories, excluded)) {
+                return false;
             }
         }
 
-        boolean result = inclusions.isEmpty();
-
-        for (Class<?> category : categories) {
-            if (matches(category, inclusions)) {
-                result = true;
-                break;
-            }
-        }
-
-        if (result) {
-            for (Class<?> category : categories) {
-                if (matches(category, exclusions)) {
-                    result = false;
-                    break;
-                }
-            }
-        }
-        return result;
+        // Couldn't be excluded, and with no suite's included categories treated as should run.
+        return included.isEmpty() || matchesAnyParentCategories(childCategories, included);
     }
 
-    private boolean matches(final Class<?> category, final Set<Class<?>> categories) {
-        for (Class<?> cls : categories) {
-            if (cls.isAssignableFrom(category)) {
+    /**
+     * @return <tt>true</tt> if at least one (any) parent category match a child, otherwise <tt>false</tt>.
+     * If empty <tt>parentCategories</tt>, returns <tt>false</tt>.
+     */
+    private boolean matchesAnyParentCategories(Set<Class<?>> childCategories, Set<Class<?>> parentCategories) {
+        for (Class<?> parentCategory : parentCategories) {
+            if (hasAssignableTo(childCategories, parentCategory)) {
                 return true;
             }
         }
         return false;
     }
 
-    @Override
-    public final String describe() {
-        StringBuilder sb = new StringBuilder();
-        if (!inclusions.isEmpty()) {
-            sb.append("(");
-            sb.append(StringUtils.join(inclusions, " OR "));
-            sb.append(")");
-            if (!exclusions.isEmpty()) {
-                sb.append(" AND ");
-            }
-        }
-        if (!exclusions.isEmpty()) {
-            sb.append("NOT (");
-            sb.append(StringUtils.join(exclusions, " OR "));
-            sb.append(")");
+    private static Set<Class<?>> categories(Description description) {
+        Set<Class<?>> categories= new HashSet<Class<?>>();
+        Collections.addAll(categories, directCategories(description));
+        Collections.addAll(categories, directCategories(parentDescription(description)));
+        return categories;
+    }
+
+    private static Description parentDescription(Description description) {
+        Class<?> testClass= description.getTestClass();
+        return testClass == null ? null : Description.createSuiteDescription(testClass);
+    }
+
+    private static Class<?>[] directCategories(Description description) {
+        if (description == null) {
+            return new Class<?>[0];
         }
 
-        return sb.toString();
+        Category annotation= description.getAnnotation(Category.class);
+        return annotation == null ? new Class<?>[0] : annotation.value();
+    }
+
+    private static boolean hasAssignableTo(Set<Class<?>> assigns, Class<?> to) {
+        for (final Class<?> from : assigns) {
+            if (to.isAssignableFrom(from)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
